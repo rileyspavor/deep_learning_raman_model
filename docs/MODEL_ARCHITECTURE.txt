@@ -1,0 +1,311 @@
+================================================================================
+Raman Spectroscopy Classification Model - Architecture Documentation
+================================================================================
+
+MODEL NAME: Raman1DCNN
+PURPOSE: 1D Convolutional Neural Network for classifying Raman spectroscopy spectra
+
+================================================================================
+OVERVIEW
+================================================================================
+
+The Raman1DCNN is a deep learning model designed specifically for classifying 
+Raman spectroscopy spectra into different material classes. It uses a 1D 
+convolutional neural network architecture that processes spectral data as 
+sequential signals to identify characteristic peaks and patterns associated 
+with different graphene and carbon-based materials.
+
+The model architecture consists of:
+  1. Backbone: Multi-layer 1D convolutional blocks with pooling
+  2. Classification Head: Fully connected layers for final classification
+  3. Optional Ordinal Head: For quality/defect density prediction (not used in default config)
+
+================================================================================
+ARCHITECTURE COMPONENTS
+================================================================================
+
+1. Conv1DBlock (Reusable Building Block)
+   -------------------------------
+   A modular convolutional block that includes:
+   - 1D Convolutional Layer
+   - Optional Batch Normalization
+   - Activation Function (ReLU by default, supports LeakyReLU, GELU)
+   - Optional Dropout for regularization
+
+   Configuration:
+   - Padding: Automatically calculated as kernel_size // 2 to preserve length
+   - Batch normalization: Enabled by default
+   - Dropout: Configurable (default: 0.0 in blocks, 0.3 overall)
+
+2. Backbone (Convolutional Feature Extraction)
+   -------------------------------
+   The backbone consists of 4 convolutional blocks, each followed by max pooling:
+
+   Block 1: Conv1D → BatchNorm → ReLU → Dropout → MaxPool1D
+   Block 2: Conv1D → BatchNorm → ReLU → Dropout → MaxPool1D
+   Block 3: Conv1D → BatchNorm → ReLU → Dropout → MaxPool1D
+   Block 4: Conv1D → BatchNorm → ReLU → MaxPool1D
+
+   Default Configuration:
+   - Channels: [32, 64, 128, 256]  (increasing feature maps)
+   - Kernel Sizes: [7, 5, 5, 3]    (decreasing receptive fields)
+   - Pool Sizes: [2, 2, 2, 2]      (all use 2x downsampling)
+   - Input Channels: 1             (single-channel spectrum)
+   - Batch Normalization: Enabled
+   - Dropout: 0.3 (disabled in final block)
+
+3. Classification Head (Fully Connected Layers)
+   -------------------------------
+   Processes flattened features from backbone:
+   
+   Layer 1: Linear → ReLU → Dropout
+   Layer 2: Linear → ReLU → Dropout
+   Output: Linear (to n_classes)
+
+   Default Configuration:
+   - Hidden Layers: [128, 64] neurons
+   - Dropout: 0.3
+   - Output: n_classes logits (9 classes for graphene materials)
+
+================================================================================
+LAYER-BY-LAYER BREAKDOWN
+================================================================================
+
+INPUT LAYER
+-----------
+Shape: (batch_size, 1, spectrum_length)
+- Single channel spectrum input
+- Spectrum length depends on wavenumber range and resolution
+- Typically 1024-2048 points for Raman spectra
+
+BACKBONE LAYERS
+-----------
+
+Layer 1: Conv1D Block
+  - Input: (batch_size, 1, L)
+  - Conv1D: 1 → 32 channels, kernel_size=7, padding=3
+  - BatchNorm1D: 32 channels
+  - ReLU activation
+  - Dropout: 0.3
+  - MaxPool1D: kernel_size=2, stride=2
+  - Output: (batch_size, 32, L/2)
+
+Layer 2: Conv1D Block
+  - Input: (batch_size, 32, L/2)
+  - Conv1D: 32 → 64 channels, kernel_size=5, padding=2
+  - BatchNorm1D: 64 channels
+  - ReLU activation
+  - Dropout: 0.3
+  - MaxPool1D: kernel_size=2, stride=2
+  - Output: (batch_size, 64, L/4)
+
+Layer 3: Conv1D Block
+  - Input: (batch_size, 64, L/4)
+  - Conv1D: 64 → 128 channels, kernel_size=5, padding=2
+  - BatchNorm1D: 128 channels
+  - ReLU activation
+  - Dropout: 0.3
+  - MaxPool1D: kernel_size=2, stride=2
+  - Output: (batch_size, 128, L/8)
+
+Layer 4: Conv1D Block
+  - Input: (batch_size, 128, L/8)
+  - Conv1D: 128 → 256 channels, kernel_size=3, padding=1
+  - BatchNorm1D: 256 channels
+  - ReLU activation
+  - MaxPool1D: kernel_size=2, stride=2
+  - Output: (batch_size, 256, L/16)
+  - Note: No dropout in final convolutional block
+
+FLATTENING
+----------
+- Flattens output from backbone: (batch_size, 256, L/16) → (batch_size, 256*L/16)
+- Automatically calculates flattened size based on input length
+
+CLASSIFICATION HEAD
+-------------------
+
+Fully Connected Layer 1:
+  - Input: (batch_size, flattened_size)
+  - Linear: flattened_size → 128
+  - ReLU activation
+  - Dropout: 0.3
+  - Output: (batch_size, 128)
+
+Fully Connected Layer 2:
+  - Input: (batch_size, 128)
+  - Linear: 128 → 64
+  - ReLU activation
+  - Dropout: 0.3
+  - Output: (batch_size, 64)
+
+Output Layer:
+  - Input: (batch_size, 64)
+  - Linear: 64 → n_classes (9 classes)
+  - Output: (batch_size, 9) logits
+
+================================================================================
+DEFAULT CONFIGURATION PARAMETERS
+================================================================================
+
+Model Configuration (as used in train_v3.py):
+  - input_length: Variable (depends on data preprocessing)
+  - n_classes: 9
+  - n_channels: [32, 64, 128, 256]
+  - kernel_sizes: [7, 5, 5, 3]
+  - pool_sizes: [2, 2, 2, 2]
+  - use_batch_norm: True
+  - dropout: 0.3
+  - fc_hidden: [128, 64]
+  - use_ordinal_head: False
+
+Class Labels (9 classes):
+  0: graphite
+  1: exfoliated_graphene
+  2: gnp_high_quality
+  3: gnp_medium_quality
+  4: multilayer_graphene
+  5: graphene_oxide
+  6: reduced_graphene_oxide
+  7: defective_graphene
+  8: graphitized_carbon
+
+================================================================================
+DESIGN DECISIONS & RATIONALE
+================================================================================
+
+1. 1D Convolutions:
+   - Raman spectra are 1D sequential signals
+   - 1D convolutions capture local patterns and peak relationships
+   - More efficient than 2D convolutions for spectral data
+
+2. Increasing Channel Depth:
+   - Progressively increases from 32 to 256 channels
+   - Allows model to learn increasingly complex spectral features
+   - Early layers learn basic patterns, later layers learn combinations
+
+3. Decreasing Kernel Sizes:
+   - Starts with larger kernels (7) for broad feature detection
+   - Progressively smaller kernels (5, 5, 3) for fine-grained details
+   - After pooling, smaller kernels maintain effective receptive field
+
+4. Max Pooling (2x downsampling):
+   - Reduces computational complexity
+   - Provides translation invariance
+   - 4 pooling layers = 16x spatial reduction overall
+
+5. Batch Normalization:
+   - Stabilizes training
+   - Allows higher learning rates
+   - Reduces internal covariate shift
+
+6. Dropout (0.3):
+   - Prevents overfitting
+   - Applied in convolutional blocks and FC layers
+   - Removed from final conv block to preserve features
+
+7. Two FC Layers:
+   - Gradual dimensionality reduction (flattened → 128 → 64 → 9)
+   - Allows non-linear feature combination
+   - Final layer outputs logits for 9 classes
+
+================================================================================
+INPUT/OUTPUT SPECIFICATIONS
+================================================================================
+
+INPUT:
+  - Format: torch.Tensor
+  - Shape: (batch_size, 1, spectrum_length)
+  - Dtype: torch.float32
+  - Description: Single-channel Raman spectrum
+  - Example: (32, 1, 2048) for batch of 32 spectra
+
+OUTPUT (Classification):
+  - Format: torch.Tensor
+  - Shape: (batch_size, n_classes)
+  - Dtype: torch.float32
+  - Description: Logits (un-normalized scores) for each class
+  - Use: Apply softmax to get probabilities, argmax to get predicted class
+  - Example: (32, 9) for batch of 32 spectra with 9 classes
+
+FORWARD PASS FLOW:
+  1. Input spectrum → Backbone → Feature maps
+  2. Feature maps → Flatten → Feature vector
+  3. Feature vector → Classification head → Class logits
+  4. (Optional) Apply softmax → Class probabilities
+
+================================================================================
+MODEL COMPLEXITY
+================================================================================
+
+Total Parameters: Variable (depends on input_length)
+- Calculated automatically based on input spectrum length
+- Typical range: 500,000 - 2,000,000 parameters for common spectrum lengths
+
+Parameter Distribution:
+- Backbone (Convolutional): Majority of parameters
+- Classification Head: Smaller portion
+- BatchNorm: Minimal parameters (tracking stats)
+
+================================================================================
+FACTORY FUNCTION
+================================================================================
+
+The model can be created using the create_model() factory function:
+
+    from model import create_model
+    
+    model = create_model(
+        input_length=2048,
+        n_classes=9,
+        config={
+            'n_channels': [32, 64, 128, 256],
+            'kernel_sizes': [7, 5, 5, 3],
+            'pool_sizes': [2, 2, 2, 2],
+            'use_batch_norm': True,
+            'dropout': 0.3,
+            'fc_hidden': [128, 64],
+            'use_ordinal_head': False
+        }
+    )
+
+Or with default configuration:
+    model = create_model(input_length=2048, n_classes=9)
+
+================================================================================
+TRAINING DETAILS
+================================================================================
+
+- Optimizer: Adam (typically)
+- Loss Function: CrossEntropyLoss (for multi-class classification)
+- Batch Size: Configurable (typically 32-128)
+- Device: Supports both CPU and GPU (CUDA)
+- Initialization: Xavier uniform or Kaiming uniform (default)
+
+================================================================================
+NOTES
+================================================================================
+
+- The model automatically calculates the flattened size after the backbone
+  by running a dummy input through the network during initialization.
+
+- Dropout is disabled during inference (model.eval()) for consistent predictions.
+
+- The model supports returning intermediate features via return_features=True
+  in the forward() method for visualization or feature extraction.
+
+- Optional ordinal head is available but not used in the default configuration.
+  It can be enabled for regression/ordinal classification tasks.
+
+- The architecture is modular and allows easy customization of:
+  - Number of layers
+  - Channel sizes
+  - Kernel sizes
+  - Pooling strategies
+  - Dropout rates
+  - FC layer sizes
+
+================================================================================
+END OF ARCHITECTURE DOCUMENTATION
+================================================================================
+
